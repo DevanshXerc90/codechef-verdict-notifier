@@ -1,0 +1,25 @@
+{
+  "manifest_version": 2,
+  "name": "CodeChef Verdict Notifier",
+  "description": "Notifies when your CodeChef submission gets judged.",
+  "version": "1.0",
+  "permissions": [
+    "webRequest",
+    "webRequestBlocking",
+    "tabs",
+    "notifications",
+    "*://*.codechef.com/*"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://www.codechef.com/submit/*"],
+      "js": ["content.js"]
+    }
+  ],
+  "browser_action": {
+    "default_icon": "icons/icon.png"
+  }
+}
