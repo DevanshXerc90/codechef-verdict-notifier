@@ -1,25 +1,37 @@
 {
-  "manifest_version": 2,
+  "manifest_version": 3,
   "name": "CodeChef Verdict Notifier",
   "description": "Notifies when your CodeChef submission gets judged.",
   "version": "1.0",
   "permissions": [
     "webRequest",
-    "webRequestBlocking",
+    
     "tabs",
     "notifications",
-    "*://*.codechef.com/*"
+    "storage"
+  ],
+  "host_permissions": [
+    "https://www.codechef.com/*"
   ],
   "background": {
-    "scripts": ["background.js"]
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["*://www.codechef.com/submit/*"],
+      "matches": ["https://www.codechef.com/*"],
       "js": ["content.js"]
     }
   ],
-  "browser_action": {
-    "default_icon": "icons/icon.png"
+  "action": {
+    "default_icon": {
+      "16": "icons/icon.png",
+      "48": "icons/icon.png",
+      "128": "icons/icon.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon.png",
+    "48": "icons/icon.png",
+    "128": "icons/icon.png"
   }
 }
