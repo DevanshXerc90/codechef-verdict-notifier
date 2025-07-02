@@ -1,37 +1,59 @@
 console.log("✅ Background script started");
 
-let submissionMap = {}; // To avoid duplicate processing
+let submissionMap = {}; // Stores all submissions
 
-// Debug: Log all outgoing requests
+// 📡 Listen for IDE submissions
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
-    console.log("📡 onBeforeRequest triggered:", details.url);
+    const url = details.url;
+    console.log("📡 onBeforeRequest triggered:", url);
+
+    const ideMatch = url.match(/\/api\/ide\/submit\?solution_id=(\d+)/);
+    if (ideMatch) {
+      const submissionId = ideMatch[1];
+      console.log("🆕 IDE Submission detected:", submissionId);
+
+      if (submissionMap[submissionId]) return;
+
+      submissionMap[submissionId] = {
+        method: 'ide',
+        pollUrl: `https://www.codechef.com/error_status_table/${submissionId}/`
+      };
+
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs.length === 0) return;
+
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'getProblemInfo' }, (response) => {
+          if (chrome.runtime.lastError || !response) {
+            console.warn("⚠️ Could not get problem info for IDE submission");
+            return;
+          }
+
+          console.log("📦 Got IDE problem info:", response);
+          pollIdeSubmissionStatus(submissionId, {
+            problemName: response.problemName,
+            problemCode: response.problemCode
+          });
+        });
+      });
+    }
   },
   { urls: ["<all_urls>"] }
 );
 
-// Listen to submission requests using webRequest API
+// 🌐 Listen for classic /api/v4/submissions/{id}
 chrome.webRequest.onBeforeSendHeaders.addListener(
-  async (details) => {
+  (details) => {
     const url = details.url;
     console.log("🌐 webRequest triggered with URL:", url);
 
-    // Match URLs like /api/v4/submissions/41025313
-    const submissionIdMatch = url.match(/\/api\/v4\/submissions\/(\d+)/);
-    if (!submissionIdMatch) {
-      console.log("⚠️ Not a submission URL:", url);
-      return;
-    }
+    const match = url.match(/\/api\/v4\/submissions\/(\d+)/);
+    if (!match) return;
 
-    const submissionId = submissionIdMatch[1];
-    console.log("🆔 Found submission ID:", submissionId);
+    const submissionId = match[1];
+    console.log("🆔 Classic submission detected:", submissionId);
+    if (submissionMap[submissionId]) return;
 
-    if (submissionMap[submissionId]) {
-      console.log("⏭️ Already processed this submission:", submissionId);
-      return;
-    }
-
-    // Extract x-csrf-token
     let csrfToken = '';
     for (let header of details.requestHeaders) {
       if (header.name.toLowerCase() === 'x-csrf-token') {
@@ -40,63 +62,67 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
       }
     }
 
-    if (!csrfToken) {
-      console.log("❌ CSRF token not found in headers");
-      return;
-    }
+    if (!csrfToken) return;
 
-    console.log("🔐 CSRF token extracted");
-
-    // Save submission info
     submissionMap[submissionId] = {
+      method: 'classic',
       csrfToken,
-      statusUrl: url,
+      pollUrl: url
     };
 
-    // Ask content script for problem info
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs.length === 0) {
-        console.log("❗ No active tab found");
-        return;
-      }
+      if (tabs.length === 0) return;
 
-      const tabId = tabs[0].id;
-      console.log("💬 Sending message to content.js for problem info");
-
-      chrome.tabs.sendMessage(
-        tabId,
-        { action: 'getProblemInfo' },
-        (response) => {
-          if (chrome.runtime.lastError || !response) {
-            console.warn("⚠️ Could not get problem info from content script:", chrome.runtime.lastError);
-            return;
-          }
-
-          submissionMap[submissionId].problemName = response.problemName;
-          submissionMap[submissionId].problemCode = response.problemCode;
-          console.log("📦 Got problem info:", response);
-
-          // Begin polling for verdict
-          checkSubmissionStatus(submissionId);
+      chrome.tabs.sendMessage(tabs[0].id, { action: 'getProblemInfo' }, (response) => {
+        if (chrome.runtime.lastError || !response) {
+          console.warn("⚠️ Could not get problem info for classic submission");
+          return;
         }
-      );
+
+        submissionMap[submissionId].problemName = response.problemName;
+        submissionMap[submissionId].problemCode = response.problemCode;
+
+        pollClassicSubmissionStatus(submissionId);
+      });
     });
   },
   { urls: ['https://www.codechef.com/api/v4/submissions/*'] },
   ['requestHeaders']
 );
 
-// Poll CodeChef until verdict is ready
-function checkSubmissionStatus(submissionId) {
-  const submission = submissionMap[submissionId];
-  if (!submission) return;
+// 🔁 Poll IDE verdict
+function pollIdeSubmissionStatus(solutionId, problemInfo) {
+  console.log("🔁 Polling IDE verdict for", solutionId);
 
-  const { statusUrl, csrfToken, problemName, problemCode } = submission;
-  console.log("📡 Polling submission status:", statusUrl);
-  console.log(`🔁 Polling verdict for ${submissionId} (${problemCode})`);
+  fetch(`https://www.codechef.com/error_status_table/${solutionId}/`)
+    .then(res => res.text())
+    .then(html => {
+      const verdictMatch = html.match(/<td[^>]*class=["']?status[^>]*>(.*?)<\/td>/i);
+      const verdictRaw = verdictMatch?.[1]?.replace(/<[^>]*>/g, '').trim();
+
+      console.log("📨 IDE verdict response:", verdictRaw);
+
+      if (verdictRaw && verdictRaw.toLowerCase() !== 'waiting') {
+        const name = problemInfo?.problemName || 'Unknown';
+        const code = problemInfo?.problemCode || solutionId;
+        notifyUser(name, code, verdictRaw);
+      } else {
+        console.log("⏳ IDE verdict still waiting, retrying...");
+        setTimeout(() => pollIdeSubmissionStatus(solutionId, problemInfo), 5000);
+      }
+    })
+    .catch(err => {
+      console.error("❌ Error polling IDE submission:", err.message);
+    });
+}
+
+// 🔁 Poll Classic verdict
+function pollClassicSubmissionStatus(submissionId) {
+  const { pollUrl, csrfToken, problemName, problemCode } = submissionMap[submissionId];
+  console.log(`🔁 Polling classic verdict for ${submissionId}`);
 
   const xhr = new XMLHttpRequest();
-  xhr.open('GET', statusUrl, true);
+  xhr.open('GET', pollUrl, true);
   xhr.setRequestHeader('x-csrf-token', csrfToken);
   xhr.setRequestHeader('Accept', 'application/json');
 
@@ -107,26 +133,18 @@ function checkSubmissionStatus(submissionId) {
           const res = JSON.parse(xhr.responseText);
           const result = res.result?.data?.content;
 
-          console.log("📨 Submission response:", result);
-
-          if (result && result.result_code && result.result_code !== 'waiting') {
-            console.log("✅ Verdict received:", result.result_code);
+          if (result && result.result_code && result.result_code.toLowerCase() !== 'waiting') {
+            console.log("✅ Classic verdict received:", result.result_code);
             notifyUser(problemName, problemCode, result.result_code);
-
-            // Optional: Save to popup
-            chrome.storage.local.set({
-              lastStatus: result.result_code,
-              lastProblem: `${problemName} (${problemCode})`
-            });
           } else {
-            console.log("⏳ Verdict not ready yet, retrying...");
-            setTimeout(() => checkSubmissionStatus(submissionId), 5000);
+            console.log("⏳ Classic verdict still waiting...");
+            setTimeout(() => pollClassicSubmissionStatus(submissionId), 5000);
           }
         } catch (e) {
-          console.error("❌ Error parsing verdict JSON", e);
+          console.error("❌ Error parsing classic verdict JSON:", e.message);
         }
       } else {
-        console.error("❌ Failed to get submission status:", xhr.status);
+        console.error("❌ Failed to get classic verdict. HTTP:", xhr.status);
       }
     }
   };
@@ -134,7 +152,7 @@ function checkSubmissionStatus(submissionId) {
   xhr.send();
 }
 
-// Notify user via desktop
+// 🔔 Notify User
 function notifyUser(problemName, problemCode, verdict) {
   const message = `${problemName} (${problemCode}): ${verdict}`;
   console.log("🔔 Sending notification:", message);
