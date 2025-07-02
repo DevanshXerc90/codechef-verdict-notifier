@@ -1,29 +1,33 @@
+console.log("📦 content.js loaded");
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  console.log("📥 content.js received message:", request);
+
   if (request.action === 'getProblemInfo') {
     let problemName = '';
     let problemCode = '';
 
     try {
-      // ✅ Try to extract from breadcrumb (most accurate)
+      // ✅ Extract from breadcrumb (most accurate)
       const breadcrumbLast = document.querySelector('.breadcrumb li:last-child');
       if (breadcrumbLast) {
         problemName = breadcrumbLast.textContent.trim();
       }
 
-      // ✅ Try to extract from URL path
+      // ✅ Extract from URL path
       const pathParts = window.location.pathname.split('/');
-      // URL like /START193D/problems/RECSQ or /problems/BLOBBYVOLLEY
       for (let i = pathParts.length - 1; i >= 0; i--) {
-        if (pathParts[i] && !['problems', 'submit'].includes(pathParts[i])) {
-          problemCode = pathParts[i];
+        const part = pathParts[i];
+        if (part && !['problems', 'submit', 'contests'].includes(part.toLowerCase())) {
+          problemCode = part;
           break;
         }
       }
 
-      // ⛑️ Fallback: Use heading if breadcrumb is missing
+      // ⛑️ Fallback to header text if breadcrumb is missing
       if (!problemName) {
-        const h1 = document.querySelector('h1') || document.querySelector('h2');
-        problemName = h1?.textContent?.trim() || 'Unknown Problem';
+        const heading = document.querySelector('h1, h2');
+        problemName = heading?.textContent?.trim() || 'Unknown Problem';
       }
 
       console.log("📨 Sending problem info:", problemName, problemCode);
@@ -34,6 +38,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ problemName: 'Unknown', problemCode: 'Unknown' });
     }
 
-    return true; // Allow async sendResponse
+    return true; // Allow async response
   }
 });

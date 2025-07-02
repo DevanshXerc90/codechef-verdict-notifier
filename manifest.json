@@ -16,9 +16,15 @@
     "service_worker": "background.js"
   },
   "content_scripts": [
-    {
-      "matches": ["https://www.codechef.com/*"],
-      "js": ["content.js"]
+  {
+    "matches": [
+      "https://www.codechef.com/problems/*",
+      "https://www.codechef.com/submit/*",
+      "https://www.codechef.com/START*/problems/*",
+      "https://www.codechef.com/contests/*/problems/*"
+    ],
+    "js": ["content.js"],
+       "run_at": "document_idle"
     }
   ],
   "action": {
