@@ -1,14 +1,14 @@
+console.log("✅ Background script started");
+
+let submissionMap = {}; // To avoid duplicate processing
+
+// Debug: Log all outgoing requests
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     console.log("📡 onBeforeRequest triggered:", details.url);
   },
   { urls: ["<all_urls>"] }
 );
-
-
-console.log("✅ Background script started");
-
-let submissionMap = {}; // To avoid duplicate processing
 
 // Listen to submission requests using webRequest API
 chrome.webRequest.onBeforeSendHeaders.addListener(
@@ -26,7 +26,6 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
     const submissionId = submissionIdMatch[1];
     console.log("🆔 Found submission ID:", submissionId);
 
-    // Avoid processing the same submission again
     if (submissionMap[submissionId]) {
       console.log("⏭️ Already processed this submission:", submissionId);
       return;
@@ -48,13 +47,13 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
 
     console.log("🔐 CSRF token extracted");
 
-    // Save basic submission info
+    // Save submission info
     submissionMap[submissionId] = {
       csrfToken,
       statusUrl: url,
     };
 
-    // Get the active tab to message content.js
+    // Ask content script for problem info
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs.length === 0) {
         console.log("❗ No active tab found");
@@ -64,7 +63,6 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
       const tabId = tabs[0].id;
       console.log("💬 Sending message to content.js for problem info");
 
-      // Ask content script for problem info
       chrome.tabs.sendMessage(
         tabId,
         { action: 'getProblemInfo' },
@@ -74,12 +72,11 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
             return;
           }
 
-          // Add problem name/code to submission map
           submissionMap[submissionId].problemName = response.problemName;
           submissionMap[submissionId].problemCode = response.problemCode;
           console.log("📦 Got problem info:", response);
 
-          // Begin polling CodeChef for verdict
+          // Begin polling for verdict
           checkSubmissionStatus(submissionId);
         }
       );
@@ -89,14 +86,13 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
   ['requestHeaders']
 );
 
-// Poll server until verdict is available
+// Poll CodeChef until verdict is ready
 function checkSubmissionStatus(submissionId) {
-  console.log("📡 Polling submission status:", statusUrl);
-
   const submission = submissionMap[submissionId];
   if (!submission) return;
 
   const { statusUrl, csrfToken, problemName, problemCode } = submission;
+  console.log("📡 Polling submission status:", statusUrl);
   console.log(`🔁 Polling verdict for ${submissionId} (${problemCode})`);
 
   const xhr = new XMLHttpRequest();
@@ -116,6 +112,12 @@ function checkSubmissionStatus(submissionId) {
           if (result && result.result_code && result.result_code !== 'waiting') {
             console.log("✅ Verdict received:", result.result_code);
             notifyUser(problemName, problemCode, result.result_code);
+
+            // Optional: Save to popup
+            chrome.storage.local.set({
+              lastStatus: result.result_code,
+              lastProblem: `${problemName} (${problemCode})`
+            });
           } else {
             console.log("⏳ Verdict not ready yet, retrying...");
             setTimeout(() => checkSubmissionStatus(submissionId), 5000);
@@ -132,10 +134,8 @@ function checkSubmissionStatus(submissionId) {
   xhr.send();
 }
 
-// Notify user when verdict is ready
+// Notify user via desktop
 function notifyUser(problemName, problemCode, verdict) {
-  console.log(`🎉 Verdict for ${problemCode}: ${verdict}`);
-
   const message = `${problemName} (${problemCode}): ${verdict}`;
   console.log("🔔 Sending notification:", message);
 
