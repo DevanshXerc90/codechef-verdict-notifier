@@ -106,8 +106,28 @@ function pollIdeSubmissionStatus(solutionId, problemInfo) {
     .then(res => res.text())
     .then(html => {
       // Extract first <td> after <tr> in the table
-      const matchRow = html.match(/<tr[^>]*>\s*<td[^>]*>(.*?)<\/td>.*?<\/tr>/is);
-      let verdictRaw = matchRow?.[1]?.replace(/<[^>]*>/g, '').trim();
+      const matchAllTds = html.match(/<td[^>]*>(.*?)<\/td>/g);
+
+if (matchAllTds && matchAllTds.length >= 3) {
+  // The 3rd <td> (index 2) typically holds the verdict
+  let verdictRaw = matchAllTds[2].replace(/<[^>]*>/g, '').trim();
+  console.log("📨 IDE verdict response:", verdictRaw);
+
+  if (verdictRaw && !/waiting|undefined/i.test(verdictRaw)) {
+    const name = problemInfo?.problemName || 'Unknown';
+    const code = problemInfo?.problemCode || solutionId;
+    notifyUser(name, code, verdictRaw);
+  } else {
+    console.log("⏳ IDE verdict still waiting, retrying...");
+    setTimeout(() => pollIdeSubmissionStatus(solutionId, problemInfo), 5000);
+  }
+} else {
+  console.warn("❓ Could not extract <td>s or structure changed");
+  setTimeout(() => pollIdeSubmissionStatus(solutionId, problemInfo), 5000);
+}
+
+
+
 
       console.log("📨 IDE verdict response:", verdictRaw);
 
