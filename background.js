@@ -1,197 +1,165 @@
 console.log("✅ Background script started");
 
-let submissionMap = {}; // Stores submissions being tracked
+let submissionMap = {}; 
+const IDE_DELAY = 5000;
+const CLASSIC_DELAY = 5000;
 
-// 🔍 Listen to outgoing requests (IDE-style)
-chrome.webRequest.onBeforeRequest.addListener(
-  (details) => {
-    const url = details.url;
-    console.log("📡 onBeforeRequest triggered:", url);
+/* -------------------------------------------------- */
+/* Helper – lookup problem name via CodeChef API      */
+/* -------------------------------------------------- */
+async function resolveProblemName(code, fallback = 'Unknown Problem') {
+  if (!code || /unknown/i.test(code)) return fallback;
 
-    const ideSubmitMatch = url.match(/\/api\/ide\/submit\?solution_id=(\d+)/);
-    if (ideSubmitMatch) {
-      const submissionId = ideSubmitMatch[1];
-      console.log("🆕 IDE Submission detected:", submissionId);
+  
+  const endpoints = [
+    `https://www.codechef.com/api/practice/problems/${code}`,
+    `https://www.codechef.com/api/contests/PRACTICE/problems/${code}`
+  ];
 
-      if (submissionMap[submissionId]) return;
-
-      submissionMap[submissionId] = {
-        method: 'ide',
-        pollUrl: `https://www.codechef.com/error_status_table/${submissionId}/`
-      };
-
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs.length === 0) return;
-        const tabId = tabs[0].id;
-
-        chrome.tabs.sendMessage(tabId, { action: 'getProblemInfo' }, (response) => {
-          if (chrome.runtime.lastError || !response) {
-            console.warn("⚠️ Could not get problem info, using fallback values");
-            pollIdeSubmissionStatus(submissionId, {
-              problemName: 'Unknown Problem',
-              problemCode: submissionId
-            });
-            return;
-          }
-
-          console.log("📦 Got IDE problem info:", response);
-          pollIdeSubmissionStatus(submissionId, {
-            problemName: response.problemName || 'Unknown Problem',
-            problemCode: response.problemCode || submissionId
-          });
-        });
-      });
-    }
-  },
-  { urls: ["<all_urls>"] }
-);
-
-// 🌐 Classic CodeChef submission (/api/v4/submissions/{id})
-chrome.webRequest.onBeforeSendHeaders.addListener(
-  async (details) => {
-    const url = details.url;
-    console.log("🌐 webRequest triggered with URL:", url);
-
-    const submissionIdMatch = url.match(/\/api\/v4\/submissions\/(\d+)/);
-    if (!submissionIdMatch) return;
-
-    const submissionId = submissionIdMatch[1];
-    console.log("🆔 Classic submission detected:", submissionId);
-
-    if (submissionMap[submissionId]) return;
-
-    // Extract CSRF token
-    let csrfToken = '';
-    for (let header of details.requestHeaders) {
-      if (header.name.toLowerCase() === 'x-csrf-token') {
-        csrfToken = header.value;
-        break;
-      }
-    }
-
-    if (!csrfToken) return;
-
-    submissionMap[submissionId] = {
-      method: 'classic',
-      csrfToken,
-      pollUrl: url
-    };
-
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs.length === 0) return;
-      const tabId = tabs[0].id;
-
-      chrome.tabs.sendMessage(tabId, { action: 'getProblemInfo' }, (response) => {
-        if (chrome.runtime.lastError || !response) {
-          console.warn("⚠️ Could not get problem info:", chrome.runtime.lastError);
-          return;
-        }
-
-        submissionMap[submissionId].problemName = response.problemName;
-        submissionMap[submissionId].problemCode = response.problemCode;
-
-        pollClassicSubmissionStatus(submissionId);
-      });
-    });
-  },
-  { urls: ['https://www.codechef.com/api/v4/submissions/*'] },
-  ['requestHeaders']
-);
-
-// 🌀 Poll for verdict in IDE submissions
-function pollIdeSubmissionStatus(solutionId, problemInfo) {
-  console.log("🔁 Polling IDE verdict for", solutionId);
-
-  fetch(`https://www.codechef.com/error_status_table/${solutionId}/`)
-    .then(res => res.text())
-    .then(html => {
-      // Extract first <td> after <tr> in the table
-      const matchAllTds = html.match(/<td[^>]*>(.*?)<\/td>/g);
-
-if (matchAllTds && matchAllTds.length >= 3) {
-  // The 3rd <td> (index 2) typically holds the verdict
-  let verdictRaw = matchAllTds[2].replace(/<[^>]*>/g, '').trim();
-  console.log("📨 IDE verdict response:", verdictRaw);
-
-  if (verdictRaw && !/waiting|undefined/i.test(verdictRaw)) {
-    const name = problemInfo?.problemName || 'Unknown';
-    const code = problemInfo?.problemCode || solutionId;
-    notifyUser(name, code, verdictRaw);
-  } else {
-    console.log("⏳ IDE verdict still waiting, retrying...");
-    setTimeout(() => pollIdeSubmissionStatus(solutionId, problemInfo), 5000);
+  for (let url of endpoints) {
+    try {
+      const r = await fetch(url);
+      const j = await r.json();
+      const name = j?.problemDetails?.problem_name;
+      if (name) return name;
+    } catch (_) {  }
   }
-} else {
-  console.warn("❓ Could not extract <td>s or structure changed");
-  setTimeout(() => pollIdeSubmissionStatus(solutionId, problemInfo), 5000);
+  return fallback;
 }
 
+/* -------------------------------------------------- */
+/* 1) Detect IDE submissions                          */
+/* -------------------------------------------------- */
+chrome.webRequest.onBeforeRequest.addListener(details => {
+  const url = details.url;
+  const m = url.match(/\/api\/ide\/submit\?solution_id=(\d+)/);
+  if (!m) return;
 
+  const id = m[1];
+  if (submissionMap[id]) return;
+  console.log("🆕 IDE submission:", id);
 
+  submissionMap[id] = { method: 'ide', pollUrl: `https://www.codechef.com/error_status_table/${id}/` };
 
-      console.log("📨 IDE verdict response:", verdictRaw);
+  chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+    const tabId = tabs[0]?.id;
+    if (!tabId) return;
 
-      if (verdictRaw && !/waiting|undefined/i.test(verdictRaw)) {
-        const name = problemInfo?.problemName || 'Unknown';
-        const code = problemInfo?.problemCode || solutionId;
-        notifyUser(name, code, verdictRaw);
+    chrome.tabs.sendMessage(tabId, { action: 'getProblemInfo' }, resp => {
+      if (chrome.runtime.lastError || !resp) {
+        resp = { problemName: 'Unknown Problem', problemCode: id };
+      }
+      pollIde(id, resp);
+    });
+  });
+}, { urls: ["<all_urls>"] });
+
+/* -------------------------------------------------- */
+/* 2) Detect classic submissions                      */
+/* -------------------------------------------------- */
+chrome.webRequest.onBeforeSendHeaders.addListener(details => {
+  const url = details.url;
+  const m = url.match(/\/api\/v4\/submissions\/(\d+)/);
+  if (!m) return;
+
+  const id = m[1];
+  if (submissionMap[id]) return;
+  console.log("🆕 Classic submission:", id);
+
+  const csrf = details.requestHeaders.find(h => h.name.toLowerCase() === 'x-csrf-token')?.value;
+  if (!csrf) return;
+
+  submissionMap[id] = { method: 'classic', csrfToken: csrf, pollUrl: url };
+
+  chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+    const tabId = tabs[0]?.id;
+    if (!tabId) return;
+
+    chrome.tabs.sendMessage(tabId, { action: 'getProblemInfo' }, resp => {
+      if (chrome.runtime.lastError || !resp) resp = { problemName: 'Unknown', problemCode: id };
+      submissionMap[id].problemName = resp.problemName;
+      submissionMap[id].problemCode  = resp.problemCode;
+      pollClassic(id);
+    });
+  });
+}, { urls: ["https://www.codechef.com/api/v4/submissions/*"] }, ["requestHeaders"]);
+
+/* -------------------------------------------------- */
+/* 3) Poll IDE verdict                                */
+/* -------------------------------------------------- */
+function pollIde(id, info) {
+  fetch(`https://www.codechef.com/error_status_table/${id}/`)
+    .then(r => r.text())
+    .then(html => {
+      const tds = html.match(/<td[^>]*>(.*?)<\/td>/g);
+      const verdict = tds && tds[2] ? tds[2].replace(/<[^>]+>/g,'').trim() : '';
+      console.log("📨 IDE verdict:", verdict || 'Waiting');
+
+      if (verdict && !/waiting|queue|undefined/i.test(verdict)) {
+        resolveProblemName(info.problemCode, info.problemName).then(name => {
+          notifyUser(name, info.problemCode, verdict);
+        });
       } else {
-        console.log("⏳ IDE verdict still waiting, retrying...");
-        setTimeout(() => pollIdeSubmissionStatus(solutionId, problemInfo), 5000);
+        setTimeout(() => pollIde(id, info), IDE_DELAY);
       }
     })
     .catch(err => {
-      console.error("❌ Error polling IDE submission:", err);
+      console.error("❌ IDE poll error:", err);
+      setTimeout(() => pollIde(id, info), IDE_DELAY);
     });
 }
 
-
-// 🌀 Poll for verdict in classic submissions
-function pollClassicSubmissionStatus(submissionId) {
-  const { pollUrl, csrfToken, problemName, problemCode } = submissionMap[submissionId];
-  console.log(`🔁 Polling classic verdict for ${submissionId}`);
+/* -------------------------------------------------- */
+/* 4) Poll Classic verdict                            */
+/* -------------------------------------------------- */
+function pollClassic(id) {
+  const sub = submissionMap[id];
+  if (!sub) return;
 
   const xhr = new XMLHttpRequest();
-  xhr.open('GET', pollUrl, true);
-  xhr.setRequestHeader('x-csrf-token', csrfToken);
-  xhr.setRequestHeader('Accept', 'application/json');
+  xhr.open('GET', sub.pollUrl);
+  xhr.setRequestHeader('x-csrf-token', sub.csrfToken);
+  xhr.onreadystatechange = () => {
+    if (xhr.readyState !== 4) return;
+    if (xhr.status !== 200) {
+      console.error("❌ HTTP", xhr.status, "retrying");
+      return setTimeout(() => pollClassic(id), CLASSIC_DELAY);
+    }
 
-  xhr.onreadystatechange = function () {
-    if (xhr.readyState === 4) {
-      if (xhr.status === 200) {
-        try {
-          const res = JSON.parse(xhr.responseText);
-          const result = res.result?.data?.content;
+    try {
+      const j = JSON.parse(xhr.responseText);
+      const verdict = j?.result?.data?.content?.result_code;
+      console.log("📨 Classic verdict:", verdict || 'Waiting');
 
-          if (result && result.result_code && result.result_code !== 'waiting') {
-            console.log("✅ Classic verdict received:", result.result_code);
-            notifyUser(problemName, problemCode, result.result_code);
-          } else {
-            console.log("⏳ Classic verdict not ready yet...");
-            setTimeout(() => pollClassicSubmissionStatus(submissionId), 5000);
-          }
-        } catch (e) {
-          console.error("❌ Error parsing verdict JSON", e);
-        }
+      if (verdict && verdict !== 'waiting') {
+        resolveProblemName(sub.problemCode, sub.problemName).then(name => {
+          notifyUser(name, sub.problemCode, verdict);
+        });
       } else {
-        console.error("❌ Failed to get classic submission status:", xhr.status);
+        setTimeout(() => pollClassic(id), CLASSIC_DELAY);
       }
+    } catch (e) {
+      console.error("❌ Parse error", e);
+      setTimeout(() => pollClassic(id), CLASSIC_DELAY);
     }
   };
-
   xhr.send();
 }
 
-// 🔔 Show desktop notification
+/* -------------------------------------------------- */
+/* 5) Desktop notification                            */
+/* -------------------------------------------------- */
 function notifyUser(problemName, problemCode, verdict) {
   const message = `${problemName} (${problemCode}): ${verdict}`;
-  console.log("🔔 Sending notification:", message);
+  console.log("🔔 Notifying:", message);
 
-  chrome.notifications.create({
+  chrome.notifications.create(`cc-${Date.now()}`, {
     type: 'basic',
     iconUrl: 'icons/icon.png',
     title: 'CodeChef Submission Result',
     message,
-    priority: 2,
+    priority: 2
+  }, nid => {
+    if (chrome.runtime.lastError) console.error(chrome.runtime.lastError);
   });
 }

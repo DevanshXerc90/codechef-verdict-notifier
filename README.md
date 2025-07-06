@@ -4,9 +4,11 @@ A Chrome Extension that automatically checks the result of your CodeChef submiss
 
 ## Features
 
-- Captures CodeChef submission IDs.
-- Repeatedly polls CodeChef's judge API.
-- Sends desktop notifications on result.
+- 📦 Tracks both **classic** and **IDE-style** submissions
+- 🔍 Detects the **problem name and code** automatically
+- 🔁 Polls CodeChef servers in the background until verdict is ready
+- 🔔 Sends a **native desktop notification** with verdict and problem details
+- 💡 Works in both **practice** and **live contests**
 
 ## Installation
 
@@ -17,5 +19,8 @@ A Chrome Extension that automatically checks the result of your CodeChef submiss
 
 ## Tech Stack
 
-- JavaScript
-- Chrome Extensions API
+- JavaScript (ES6)
+- Chrome Extensions (Manifest V3)
+- Service Worker (background script)
+- `chrome.webRequest`, `chrome.tabs`, `chrome.notifications` APIs
+- HTML parsing + fallbacks
